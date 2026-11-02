@@ -62,7 +62,7 @@ equation
   PumpCost = PumpPower * cost_perP;
   SystemGeneratingRevenue = TotalGeneratingPower*cost_perP;
   TotalSystemRevenue = SystemGeneratingRevenue-PumpCost;
-  TotalSystemRevenueSum = transpose(sum(TotalSystemRevenue));
+  TotalSystemRevenueSum = TotalSystemRevenue;
 
   // Connect elements
   connect(Turbine.QOut, LowerBasin.QLateral[2]) annotation(
