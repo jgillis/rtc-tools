@@ -38,7 +38,7 @@ _JACOBIAN_ONLY = {"enable_forward": False, "enable_reverse": False}
 
 
 def _with_derivative_options(opts):
-    der = {k: v for k, v in opts.items() if k not in _JACOBIAN_ONLY}
+    der = {k: v for k, v in opts.items() if k not in _JACOBIAN_ONLY and not k.startswith("scheme")}
     return {
         **opts,
         "der_options": der,
@@ -221,7 +221,8 @@ class FMUMixin(OptimizationProblem):
         self.__fmu_outputs = list(desc.outputs)
         desc.expose_as_outputs(locals_)
         dae = ca.DaeBuilder(desc.model_name, desc.folder)
-        fmu_y = list(dae.y())
+        # Outputs that are FMU unknowns (e.g. an algebraic variable) need no output residual
+        fmu_y = [n for n in dae.y() if n not in fmu_x + fmu_z + fmu_u]
         for s in fmu_x:
             if dae.der(s) not in fmu_z:
                 raise ValueError(
@@ -354,11 +355,22 @@ class FMUMixin(OptimizationProblem):
         )
         residual = [f_alg(*self.__args)]
         if self.__fmu_y:
+            time = [v.name for v in desc.variables.values() if v.causality == "independent"]
+            scheme = {"t": time, "x": self.__fmu_x, "z": self.__fmu_z, "u": self.__fmu_u}
+            scheme["y"] = self.__fmu_y
             f_y = dae.create(
                 "fmu_outputs",
                 ["t", "x", "z", "u"],
                 ["y"],
-                _with_derivative_options({**opts, **_FINITE_DIFFERENCES}),
+                _with_derivative_options(
+                    {
+                        **opts,
+                        **_FINITE_DIFFERENCES,
+                        "scheme_in": ["t", "x", "z", "u"],
+                        "scheme_out": ["y"],
+                        "scheme": scheme,
+                    }
+                ),
             )
             residual.append(self.__y_syms - f_y(*self.__args))
             self.__f_y = f_y
