@@ -48,6 +48,26 @@ def _with_derivative_options(opts):
     }
 
 
+def _backward_difference(u, times, history=None):
+    """
+    Backward finite difference of the timeseries ``u`` on the grid ``times`` (the derivative
+    that rtc-tools' collocation uses for a state). At t0: the difference to the last point of
+    ``u`` (or else of ``history``) before t0; 0 if there is none.
+    """
+    times = np.asarray(times, dtype=float)
+    values = np.interp(times, u.times, u.values)
+    d = np.zeros_like(values)
+    d[1:] = np.diff(values) / np.diff(times)
+    t_before = u.times[u.times < times[0]]
+    if t_before.size:
+        t_prev = t_before[-1]
+        d[0] = (values[0] - np.interp(t_prev, u.times, u.values)) / (times[0] - t_prev)
+    elif history is not None and np.any(history.times < times[0]):
+        k = np.flatnonzero(history.times < times[0])[-1]
+        d[0] = (values[0] - history.values[k]) / (times[0] - history.times[k])
+    return times, d
+
+
 class _DerivativeInputs(AliasDict):
     """
     Constant inputs, with the FMU input ``der(u)`` of a constant input ``u`` computed on access
@@ -69,21 +89,10 @@ class _DerivativeInputs(AliasDict):
     def __getitem__(self, key):
         if super().__contains__(key) or key not in self.__derivative_of:
             return super().__getitem__(key)
-        u = super().__getitem__(self.__derivative_of[key])
-        times = np.asarray(self.__times(), dtype=float)
-        values = np.interp(times, u.times, u.values)
-        d = np.zeros_like(values)
-        dt = np.diff(times)
-        d[1:] = np.diff(values) / dt
-        # At t0: backward difference to the last point before t0 (data or history), else 0
-        t_before = u.times[u.times < times[0]]
-        h = self.__history.get(self.__derivative_of[key])
-        if t_before.size:
-            t_prev = t_before[-1]
-            d[0] = (values[0] - np.interp(t_prev, u.times, u.values)) / (times[0] - t_prev)
-        elif h is not None and np.sum(h.times < times[0]) > 0:
-            k = np.flatnonzero(h.times < times[0])[-1]
-            d[0] = (values[0] - h.values[k]) / (times[0] - h.times[k])
+        u = self.__derivative_of[key]
+        times, d = _backward_difference(
+            super().__getitem__(u), self.__times(), self.__history.get(u)
+        )
         return Timeseries(times, d)
 
     def get(self, key, default=None):
@@ -133,6 +142,13 @@ class FMUMixin(OptimizationProblem):
     :cvar fmu_fixed_states:
         States whose FMU start value is an initial condition (FMI has no ``fixed`` attribute).
         Default is an empty list.
+    :cvar fmu_free_initial_input_derivatives:
+        If ``True`` (default), an FMU input ``der(u)`` of a constant input ``u`` is an
+        optimization variable fixed by its bounds to the backward finite difference of ``u``
+        at every time except t0, where it is free. This matches ModelicaMixin, where such a
+        ``u`` is typically aliased to a differentiated state whose derivative at t0 is the free
+        ``initial_der`` variable. If ``False``, ``der(u)`` is a constant input, with at t0 the
+        backward difference to the data or history before t0, or 0.
     """
 
     #: Name of the FMU file (without .fmu); default: the model name
@@ -143,6 +159,9 @@ class FMUMixin(OptimizationProblem):
 
     #: States whose FMU start value is an initial condition
     fmu_fixed_states = []
+
+    #: FMU inputs der(u) of constant inputs u: free at t0 (as pymoca's initial derivative)
+    fmu_free_initial_input_derivatives = True
 
     # The collocation residual calls the FMU: it is never affine in the sense of is_affine
     check_collocation_linearity = False
@@ -222,11 +241,8 @@ class FMUMixin(OptimizationProblem):
                 )
 
         constant_input_names = set(self.fmu_constant_inputs(**kwargs))
-        constant_input_names |= {
-            d for d, u in self.__input_derivative_of.items() if u in constant_input_names
-        }
         for d, u in self.__input_derivative_of.items():
-            if d not in constant_input_names:
+            if u not in constant_input_names:
                 raise NotImplementedError(
                     f"FMUMixin: FMU input {d} is the derivative of the control {u}. Only "
                     "derivatives of constant inputs (timeseries) are supported; a control would "
@@ -248,6 +264,12 @@ class FMUMixin(OptimizationProblem):
         der_sym = dict(zip(fmu_x, self.__mx["derivatives"], strict=True))
         self.__algebraic_names = [n for n in fmu_z if n not in der_of] + fmu_y
         self.__mx["algebraics"] = [sym.setdefault(n, ca.MX.sym(n)) for n in self.__algebraic_names]
+        # Inputs der(u): constant inputs, or controls pinned by their bounds except at t0
+        self.__pinned_derivatives = (
+            dict(self.__input_derivative_of) if self.fmu_free_initial_input_derivatives else {}
+        )
+        if not self.fmu_free_initial_input_derivatives:
+            constant_input_names |= set(self.__input_derivative_of)
         self.__mx["control_inputs"] = [
             sym.setdefault(n, ca.MX.sym(n)) for n in fmu_u if n not in constant_input_names
         ]
@@ -261,7 +283,8 @@ class FMUMixin(OptimizationProblem):
         self.__settable_parameters = [
             v.name
             for v in desc.variables.values()
-            if v.causality == "parameter" and v.variability in ("fixed", "tunable")
+            if v.causality == "parameter"
+            and v.variability in ("fixed", "tunable")
             and v.type in ("Float64", "Int32", "Boolean")
         ]
         calculated = [
@@ -270,9 +293,7 @@ class FMUMixin(OptimizationProblem):
             if v.causality == "calculatedParameter" and v.type in ("Float64", "Int32", "Boolean")
         ]
         self.__mx["parameters"] = [ca.MX.sym(n) for n in self.__settable_parameters]
-        self.__default_parameters = {
-            n: desc.variables[n].start for n in self.__settable_parameters
-        }
+        self.__default_parameters = {n: desc.variables[n].start for n in self.__settable_parameters}
         try:
             self.__default_parameters.update(desc.evaluate({}, calculated))
         except Exception as e:
@@ -291,8 +312,14 @@ class FMUMixin(OptimizationProblem):
         self.__build_functions(self.__default_parameters_settable())
 
         if logger.getEffectiveLevel() == logging.DEBUG:
-            for k in ["states", "derivatives", "algebraics", "control_inputs",
-                      "constant_inputs", "parameters"]:
+            for k in [
+                "states",
+                "derivatives",
+                "algebraics",
+                "control_inputs",
+                "constant_inputs",
+                "parameters",
+            ]:
                 logger.debug(f"FMUMixin: {k}: {', '.join(v.name() for v in self.__mx[k])}")
 
         super().__init__(**kwargs)
@@ -316,13 +343,17 @@ class FMUMixin(OptimizationProblem):
         # Directional derivatives through the FmuFunction's Jacobian (see _JACOBIAN_ONLY)
         opts = {"parallelization": "serial", **_JACOBIAN_ONLY}
         f_alg = dae.create(
-            "fmu_dae_residual", ["t", "x", "z", "u"], ["alg"],
+            "fmu_dae_residual",
+            ["t", "x", "z", "u"],
+            ["alg"],
             _with_derivative_options({**opts, **_NO_ADJOINT}),
         )
         residual = [f_alg(*self.__args)]
         if self.__fmu_y:
             f_y = dae.create(
-                "fmu_outputs", ["t", "x", "z", "u"], ["y"],
+                "fmu_outputs",
+                ["t", "x", "z", "u"],
+                ["y"],
                 _with_derivative_options({**opts, **_FINITE_DIFFERENCES}),
             )
             residual.append(self.__y_syms - f_y(*self.__args))
@@ -330,7 +361,9 @@ class FMUMixin(OptimizationProblem):
         self.__dae_residual = ca.vertcat(*residual)
         if desc.initial_residuals:
             f_init = dae.create(
-                "fmu_initial_residual", ["t", "x", "z", "u"], ["ialg"],
+                "fmu_initial_residual",
+                ["t", "x", "z", "u"],
+                ["ialg"],
                 _with_derivative_options({**opts, **_NO_ADJOINT}),
             )
             self.__initial_residual = f_init(*self.__args)
@@ -366,8 +399,11 @@ class FMUMixin(OptimizationProblem):
                 "FMUMixin: ensemble members with different FMU parameter values"
             )
         if any(not _equal(values[0][n], self.__baked_parameters[n]) for n in values[0]):
-            changed = {n: values[0][n] for n in values[0]
-                       if not _equal(values[0][n], self.__baked_parameters[n])}
+            changed = {
+                n: values[0][n]
+                for n in values[0]
+                if not _equal(values[0][n], self.__baked_parameters[n])
+            }
             logger.info(f"FMUMixin: new FMU instances for parameter values {changed}")
             self.__build_functions(values[0])
             self.clear_transcription_cache()
@@ -412,11 +448,13 @@ class FMUMixin(OptimizationProblem):
         x = np.array([reference(n) for n in self.__fmu_x])
         z = np.array([0.0 if n in self.__der_of else reference(n) for n in self.__fmu_z])
         u = np.array([reference(n) for n in self.__fmu_u])
-        nominals = np.concatenate([
-            [self.variable_nominal(n) for n in self.__fmu_x],
-            [1.0 if n in self.__der_of else self.variable_nominal(n) for n in self.__fmu_z],
-            [self.variable_nominal(n) for n in self.__fmu_u],
-        ])
+        nominals = np.concatenate(
+            [
+                [self.variable_nominal(n) for n in self.__fmu_x],
+                [1.0 if n in self.__der_of else self.variable_nominal(n) for n in self.__fmu_z],
+                [self.variable_nominal(n) for n in self.__fmu_u],
+            ]
+        )
         try:
             y = np.array(self.__f_y(0.0, x, z, u)).ravel()
             jac = self.__f_y.jacobian()(0.0, x, z, u, y)
@@ -457,7 +495,8 @@ class FMUMixin(OptimizationProblem):
                     header = next(csv.reader(f, delimiter=delimiter), [])
                 columns = {c.strip() for c in header[1:]}
                 return [
-                    n for n in self.__fmu_u
+                    n
+                    for n in self.__fmu_u
                     if n in columns or any(a in columns for a in self.__fmu.variables[n].aliases)
                 ]
         logger.warning(
@@ -487,7 +526,9 @@ class FMUMixin(OptimizationProblem):
     @cached
     def output_variables(self):
         output_variables = [ca.MX.sym(n) for n in self.__fmu_outputs]
-        output_variables.extend(self.__mx["control_inputs"])
+        output_variables.extend(
+            v for v in self.__mx["control_inputs"] if v.name() not in self.__pinned_derivatives
+        )
         return output_variables
 
     def map_options(self):
@@ -512,10 +553,12 @@ class FMUMixin(OptimizationProblem):
     @cached
     def constant_inputs(self, ensemble_member):
         constant_inputs = super().constant_inputs(ensemble_member)
-        if not self.__input_derivative_of:
+        if not self.__input_derivative_of or self.__pinned_derivatives:
             return constant_inputs
         lazy = _DerivativeInputs(
-            self.alias_relation, self.__input_derivative_of, self.times,
+            self.alias_relation,
+            self.__input_derivative_of,
+            self.times,
             self.history(ensemble_member),
         )
         lazy.update(constant_inputs)
@@ -545,11 +588,28 @@ class FMUMixin(OptimizationProblem):
             v = self.__fmu.variables[n]
             m, M = bounds.get(n, (-np.inf, np.inf))
             bounds[n] = (max(m, v.min), min(M, v.max))
+        for d in self.__pinned_derivatives:
+            times, values = self.__pinned_derivative(d, ensemble_member or 0)
+            lower, upper = values.copy(), values.copy()
+            lower[0], upper[0] = -np.inf, np.inf
+            bounds[d] = (Timeseries(times, lower), Timeseries(times, upper))
         return bounds
+
+    def __pinned_derivative(self, d, ensemble_member):
+        u = self.__pinned_derivatives[d]
+        try:
+            ts = self.constant_inputs(ensemble_member)[u]
+        except KeyError:
+            raise Exception(f"FMUMixin: no values found for constant input {u} (for {d})")
+        times, values = _backward_difference(ts, self.times())
+        values[0] = 0.0
+        return times, values
 
     @cached
     def seed(self, ensemble_member):
         seed = super().seed(ensemble_member)
+        for d in self.__pinned_derivatives:
+            seed[d] = Timeseries(*self.__pinned_derivative(d, ensemble_member))
         for n in self.__fmu_x + self.__algebraic_names:
             if n in self.fmu_fixed_states:
                 continue
