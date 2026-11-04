@@ -137,6 +137,7 @@ def run_optimization_problem(
             "CSVMixin",
             "IOMixin",
             "ModelicaMixin",
+            "FMUMixin",
             "PlanningMixin",
             "ControlTreeMixin",
             "CollocatedIntegratedOptimizationProblem",

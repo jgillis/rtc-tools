@@ -184,12 +184,12 @@ class FMUDescription:
                           r'([^>]*?)\s+causality="local"', r"\1\2", text, count=1)
             var.causality = "output"
             new_outputs.append(f'    <Output valueReference="{var.value_reference}"/>\n')
-        if "<ModelStructure>" in text:
-            text = text.replace("<ModelStructure>", "<ModelStructure>\n" + "".join(new_outputs), 1)
-        else:
-            text = text.replace("<ModelStructure/>", "<ModelStructure>\n" + "".join(new_outputs)
-                                + "  </ModelStructure>", 1)
-        open(self.__md_path, "w", encoding="utf-8").write(text)
+        open(self.__md_path, "w", encoding="utf-8").write(_add_outputs(text, new_outputs))
+        # The manifest's ModelStructure replaces the Output elements of modelDescription.xml
+        mf_path = os.path.join(self.folder, LS_DAE_MANIFEST)
+        mf_text = open(mf_path, encoding="utf-8").read()
+        if "<ModelStructure" in mf_text:
+            open(mf_path, "w", encoding="utf-8").write(_add_outputs(mf_text, new_outputs))
         self.outputs = names_unique(self.outputs + list(names))
 
     def evaluate(self, start_values: dict, names: list[str]) -> dict:
@@ -239,7 +239,8 @@ class FMUDescription:
                 set_value(self.variables[n], value)
             call("fmi3EnterInitializationMode", ctypes.c_bool(False), ctypes.c_double(0.0),
                  ctypes.c_double(0.0), ctypes.c_bool(False), ctypes.c_double(0.0))
-            call("fmi3ExitInitializationMode")
+            # Read in Initialization Mode, variable by variable: a Float64 get may evaluate the
+            # model equations, which can fail at the default (start) values.
             result = {}
             for n in names:
                 var = self.variables[n]
@@ -247,9 +248,12 @@ class FMUDescription:
                 if ct is None:
                     continue
                 buf = (ct * 1)()
-                call(f"fmi3Get{var.type}", (ctypes.c_uint32 * 1)(var.value_reference),
-                     ctypes.c_size_t(1), buf, ctypes.c_size_t(1))
-                result[n] = var.python_type(buf[0])
+                status = getattr(lib, f"fmi3Get{var.type}")(
+                    inst, (ctypes.c_uint32 * 1)(var.value_reference), ctypes.c_size_t(1), buf,
+                    ctypes.c_size_t(1),
+                )
+                if status <= 1:
+                    result[n] = var.python_type(buf[0])
             return result
         finally:
             lib.fmi3FreeInstance(inst)
@@ -258,3 +262,12 @@ class FMUDescription:
 def names_unique(names):
     seen = set()
     return [n for n in names if not (n in seen or seen.add(n))]
+
+
+def _add_outputs(text, outputs):
+    """Insert <Output> elements at the start of the (first) ModelStructure element."""
+    if "<ModelStructure>" in text:
+        return text.replace("<ModelStructure>", "<ModelStructure>\n" + "".join(outputs), 1)
+    return text.replace(
+        "<ModelStructure/>", "<ModelStructure>\n" + "".join(outputs) + "  </ModelStructure>", 1
+    )
