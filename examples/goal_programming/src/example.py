@@ -51,7 +51,9 @@ class MinimizeChangeInQpumpGoal(Goal):
     def function(self, optimization_problem, ensemble_member):
         return optimization_problem.der("Q_pump")
 
-    function_nominal = 5.0
+    # The derivative is in m3/s per second, while Q_pump changes by a few
+    # m3/s per hour. Scale by the time step so that the goal is of order 1.
+    function_nominal = 5.0 / 3600.0
     priority = 3
     # Default order is 2, but we want to be explicit
     order = 2
