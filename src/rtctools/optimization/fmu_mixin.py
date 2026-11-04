@@ -167,6 +167,10 @@ class FMUMixin(OptimizationProblem):
     check_collocation_linearity = False
     linear_collocation = False
 
+    # An expanded (SX) FMU call gets its forward derivatives one direction at a time, i.e. one
+    # Jacobian evaluation of the FMU call per direction (see _JACOBIAN_ONLY); in MX, one per sweep
+    expand_dae_residual = False
+
     def __init__(self, **kwargs):
         assert "model_folder" in kwargs
 
@@ -542,6 +546,9 @@ class FMUMixin(OptimizationProblem):
         if options.get("solver") == "ipopt":
             # The FMU provides no second derivatives
             options["ipopt"].setdefault("hessian_approximation", "limited-memory")
+        # Each forward sweep through an FMU call evaluates that call's full Jacobian (see
+        # _JACOBIAN_ONLY): many directions per sweep in the DAE functions (max_num_dir)
+        options["optimized_num_dir"] = max(options.get("optimized_num_dir", 0), 64)
         return options
 
     @cached
