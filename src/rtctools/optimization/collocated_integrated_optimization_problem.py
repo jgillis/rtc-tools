@@ -56,6 +56,10 @@ class CollocatedIntegratedOptimizationProblem(OptimizationProblem, metaclass=ABC
     :cvar inline_delay_expressions:
         If ``True``, delay expressions are inlined into constraints and objectives instead of
         being added as separate equality constraints. Default is ``False``.
+    :cvar expand_dae_residual:
+        If ``True``, the DAE residual function is expanded to an SX function when possible.
+        Default is ``True``. An expanded call to an external function (e.g. an FMU) gets its
+        forward derivatives one direction at a time.
     """
 
     #: Check whether the collocation constraints are linear
@@ -66,6 +70,9 @@ class CollocatedIntegratedOptimizationProblem(OptimizationProblem, metaclass=ABC
 
     #: Whether or not the collocation constraints are linear (affine)
     linear_collocation = None
+
+    #: Expand the DAE residual function to SX when possible
+    expand_dae_residual = True
 
     def __init__(self, **kwargs):
         # Variables that will be optimized
@@ -931,7 +938,8 @@ class CollocatedIntegratedOptimizationProblem(OptimizationProblem, metaclass=ABC
 
                 # Expand the residual function if possible.
                 try:
-                    dae_residual_function_integrated = dae_residual_function_integrated.expand()
+                    if self.expand_dae_residual:
+                        dae_residual_function_integrated = dae_residual_function_integrated.expand()
                 except RuntimeError as e:
                     if "'eval_sx' not defined for" in str(e):
                         pass
@@ -966,9 +974,10 @@ class CollocatedIntegratedOptimizationProblem(OptimizationProblem, metaclass=ABC
                 )
                 # Expand the residual function if possible.
                 try:
-                    self.__dae_residual_function_collocated = (
-                        self.__dae_residual_function_collocated.expand()
-                    )
+                    if self.expand_dae_residual:
+                        self.__dae_residual_function_collocated = (
+                            self.__dae_residual_function_collocated.expand()
+                        )
                 except RuntimeError as e:
                     if "'eval_sx' not defined for" in str(e):
                         pass
