@@ -126,11 +126,14 @@ class FMUDescription:
 
         ms = md_root.find("ModelStructure")
         self.event_indicators = (
-            [] if ms is None else [int(e.get("valueReference")) for e in ms.findall("EventIndicator")]
+            []
+            if ms is None
+            else [int(e.get("valueReference")) for e in ms.findall("EventIndicator")]
         )
         self.outputs = (
-            [] if ms is None else [self.by_vr[int(e.get("valueReference"))].name
-                                   for e in ms.findall("Output")]
+            []
+            if ms is None
+            else [self.by_vr[int(e.get("valueReference"))].name for e in ms.findall("Output")]
         )
 
         # fmi-ls-dae manifest
@@ -174,14 +177,24 @@ class FMUDescription:
         new_outputs = []
         for n in names:
             var = self.variables[n]
-            pat = re.compile(r'(<\w+\s+name="' + re.escape(n) + r'"\s+valueReference="'
-                             + str(var.value_reference) + r'")')
+            pat = re.compile(
+                r'(<\w+\s+name="'
+                + re.escape(n)
+                + r'"\s+valueReference="'
+                + str(var.value_reference)
+                + r'")'
+            )
             text, count = pat.subn(r'\1 causality="output"', text, count=1)
             if count != 1:
                 raise RuntimeError(f"Cannot expose FMU variable {n} as an output")
             # An explicit causality="local" would now be duplicated
-            text = re.sub(r'(name="' + re.escape(n) + r'"[^>]*?causality="output")'
-                          r'([^>]*?)\s+causality="local"', r"\1\2", text, count=1)
+            text = re.sub(
+                r'(name="' + re.escape(n) + r'"[^>]*?causality="output")'
+                r'([^>]*?)\s+causality="local"',
+                r"\1\2",
+                text,
+                count=1,
+            )
             var.causality = "output"
             new_outputs.append(f'    <Output valueReference="{var.value_reference}"/>\n')
         open(self.__md_path, "w", encoding="utf-8").write(_add_outputs(text, new_outputs))
@@ -209,8 +222,13 @@ class FMUDescription:
         lib.fmi3InstantiateModelExchange.restype = ctypes.c_void_p
         resources = (os.path.join(self.folder, "resources") + os.sep).encode()
         inst = lib.fmi3InstantiateModelExchange(
-            b"rtctools_parameters", self.instantiation_token.encode(), resources, False, False,
-            None, cb,
+            b"rtctools_parameters",
+            self.instantiation_token.encode(),
+            resources,
+            False,
+            False,
+            None,
+            cb,
         )
         if not inst:
             raise RuntimeError("fmi3InstantiateModelExchange failed")
@@ -227,8 +245,13 @@ class FMUDescription:
             ct = ctype.get(var.type)
             if ct is None:
                 raise NotImplementedError(f"FMU variable {var.name} of type {var.type}")
-            call(f"fmi3{setter}{var.type}", (ctypes.c_uint32 * 1)(var.value_reference),
-                 ctypes.c_size_t(1), (ct * 1)(value), ctypes.c_size_t(1))
+            call(
+                f"fmi3{setter}{var.type}",
+                (ctypes.c_uint32 * 1)(var.value_reference),
+                ctypes.c_size_t(1),
+                (ct * 1)(value),
+                ctypes.c_size_t(1),
+            )
 
         try:
             if self.dae_mode_parameter is not None:
@@ -237,8 +260,14 @@ class FMUDescription:
                 call("fmi3ExitConfigurationMode")
             for n, value in start_values.items():
                 set_value(self.variables[n], value)
-            call("fmi3EnterInitializationMode", ctypes.c_bool(False), ctypes.c_double(0.0),
-                 ctypes.c_double(0.0), ctypes.c_bool(False), ctypes.c_double(0.0))
+            call(
+                "fmi3EnterInitializationMode",
+                ctypes.c_bool(False),
+                ctypes.c_double(0.0),
+                ctypes.c_double(0.0),
+                ctypes.c_bool(False),
+                ctypes.c_double(0.0),
+            )
             # Read in Initialization Mode, variable by variable: a Float64 get may evaluate the
             # model equations, which can fail at the default (start) values.
             result = {}
@@ -249,7 +278,10 @@ class FMUDescription:
                     continue
                 buf = (ct * 1)()
                 status = getattr(lib, f"fmi3Get{var.type}")(
-                    inst, (ctypes.c_uint32 * 1)(var.value_reference), ctypes.c_size_t(1), buf,
+                    inst,
+                    (ctypes.c_uint32 * 1)(var.value_reference),
+                    ctypes.c_size_t(1),
+                    buf,
                     ctypes.c_size_t(1),
                 )
                 if status <= 1:
