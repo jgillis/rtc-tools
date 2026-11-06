@@ -68,53 +68,39 @@ def as_tuple(value):
 
 # Known failures shared by several models, named after the argument they go in.
 
-# Deltares.ChannelFlow calls max() with two arrays (rtc-tools-channel-flow).
-CHECK_DELTARES_MAX = r"No matching function found for max\(\S+\.H_b\["
-# ExampleOptimization.mo ends with 'end Example;', so the class does not load.
-CHECK_WRONG_END_NAME = (
-    r"identifier at start and end are different"
-    r"|Failed to load package ExampleOptimization"
-    r"|Class ExampleOptimization not found"
-)
 # The model has fewer equations than unknowns, for example because top-level
 # inputs are bound in their declaration.
 TRANSLATE_UNDER_DETERMINED = r"Too few equations, under-determined system"
 WARNING_NO_EQUATION_LEFT = r"Variable \S+ does not have any remaining equation"
+# The initial equations of channel_wave_damping are redundant for omc.
+WARNING_INIT_SINGULAR = r"Initialization problem is structural singular"
+WARNING_INIT_OVER_SPECIFIED = r"The initial conditions are over specified"
+WARNING_NLS_ZERO_START = r"nonlinear iteration variables with default zero start"
 
 # Every example model and its known failures.
 EXAMPLE_MODELS = [
     Model("basic/Example"),
-    Model("cascading_channels/Example", fails_check=CHECK_DELTARES_MAX),
-    Model("channel_pulse/Example", fails_check=CHECK_DELTARES_MAX),
-    Model("channel_wave_damping/ExampleOptimization", fails_check=CHECK_WRONG_END_NAME),
+    Model("cascading_channels/Example", fails_translate=TRANSLATE_UNDER_DETERMINED),
+    Model("channel_pulse/Example"),
+    Model(
+        "channel_wave_damping/ExampleOptimization",
+        warns=(WARNING_INIT_SINGULAR, WARNING_INIT_OVER_SPECIFIED),
+    ),
     Model(
         "channel_wave_damping/ExampleLocalControl",
-        fails_check=(CHECK_WRONG_END_NAME, CHECK_DELTARES_MAX),
+        warns=(WARNING_INIT_SINGULAR, WARNING_INIT_OVER_SPECIFIED, WARNING_NLS_ZERO_START),
     ),
     Model("ensemble/Example"),
-    Model(
-        "goal_programming/Example",
-        fails_translate=TRANSLATE_UNDER_DETERMINED,
-        warns=WARNING_NO_EQUATION_LEFT,
-    ),
-    Model(
-        "integrator_delay/Example",
-        fails_check=r"Type mismatch in binding delay_hours = 24\.0, expected subtype of Integer",
-    ),
+    Model("goal_programming/Example"),
+    Model("integrator_delay/Example"),
     Model("lookup_table/Example"),
-    Model(
-        "mixed_integer/Example",
-        fails_translate=TRANSLATE_UNDER_DETERMINED,
-        warns=WARNING_NO_EQUATION_LEFT,
-    ),
+    Model("mixed_integer/Example"),
     Model(
         "pumped_hydropower_system/PumpedStoragePlant",
-        fails_check=r"Type mismatch for positional argument 1 in sum\(a=TotalSystemRevenue\)",
+        fails_translate=TRANSLATE_UNDER_DETERMINED,
+        warns=WARNING_NO_EQUATION_LEFT,
     ),
-    Model(
-        "simulation/Example",
-        fails_translate=r"Parameter storage_V_init has neither value nor start value",
-    ),
+    Model("simulation/Example"),
     # Under-determined by design: the equation for y is implemented in Python.
     Model(
         "simulation_with_custom_equations/SimpleModel",
@@ -122,7 +108,7 @@ EXAMPLE_MODELS = [
         warns=WARNING_NO_EQUATION_LEFT,
     ),
     Model("single_reservoir/SingleReservoir"),
-    Model("step_response/Example", fails_check=r"Class SI\.Stress not found in scope Example"),
+    Model("step_response/Example"),
 ]
 
 # Warnings that are accepted for all models.
