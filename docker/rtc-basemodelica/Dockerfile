@@ -58,7 +58,7 @@ RUN --mount=type=cache,target=/ccache,id=rtc-basemodelica-ccache \
 # ---------------------------------------------------------------------------------------------
 FROM toolchain AS casadi
 
-ARG CASADI_COMMIT=e5f5df13018085a0fadebc4e532ee88ddcdb71ac
+ARG CASADI_COMMIT=f1222f757f4a82cc7e86df3f3105068e13943752
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       python3-dev python3-numpy libpcre2-dev libpcre3-dev yodl byacc \
@@ -88,7 +88,7 @@ RUN git init -q /src/casadi && cd /src/casadi \
 # ---------------------------------------------------------------------------------------------
 FROM ubuntu:24.04 AS image
 
-ARG PYMOCA_COMMIT=48d085b3959bc7dd53940709e9f4390c0d8d0e67
+ARG PYMOCA_COMMIT=dc0db1164faaffbb420f74ae5a4dcedb4cbca637
 ARG CHANNEL_FLOW_COMMIT=656fdd3f64128db0a8dfa1d8f46990a6e94bf3ff
 ARG FMI_LS_DAE_COMMIT=f2b7ab7da0afd860a6d2bf9528ad96165da4a66b
 
